@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "2.0.1"
+  #define AppVersion "2.0.2"
 #endif
 [Setup]
 AppId={{3FDD6ECF-902E-4BA0-A1A9-17C5E6F693E1}
@@ -33,6 +33,7 @@ Name: "desktopicon"; Description: "Создать ярлык на рабочем
 Name: "fileassoc"; Description: "Добавить WAVEN Custom в список аудиоплееров Windows"; GroupDescription: "Открытие музыки:"; Flags: checkedonce
 
 [Files]
+Source: "..\dist\Waven Custom.exe"; DestName: "waven-update-helper.exe"; Flags: dontcopy
 Source: "..\dist\Waven Custom.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 
@@ -88,6 +89,25 @@ Filename: "{app}\Waven Custom.exe"; Parameters: "--make-default"; Description: "
 Filename: "{app}\Waven Custom.exe"; Description: "Запустить WAVEN Custom"; Flags: postinstall nowait skipifsilent unchecked
 
 [Code]
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  ExitCode: Integer;
+  PlayerPath: String;
+begin
+  Result := '';
+  ExitCode := -1;
+  PlayerPath := ExpandConstant('{app}\Waven Custom.exe');
+  if not FileExists(PlayerPath) then exit;
+  ExtractTemporaryFile('waven-update-helper.exe');
+  Log('Graceful shutdown of the player being updated: ' + PlayerPath);
+  if not Exec(ExpandConstant('{tmp}\waven-update-helper.exe'),
+    '--prepare-update "' + PlayerPath + '"', '', SW_HIDE, ewWaitUntilTerminated, ExitCode) then
+    Result := 'Не удалось запустить подготовку обновления. Закройте WAVEN Custom и повторите установку.'
+  else if ExitCode <> 0 then
+    Result := 'WAVEN Custom не завершил работу. Закройте его окна (включая мастер MP3) и повторите установку. Программа не будет закрыта принудительно.';
+  Log('Update preparation result: ' + IntToStr(ExitCode));
+end;
+
 procedure InitializeWizard();
 begin
   WizardForm.FinishedLabel.Caption := 'WAVEN Custom установлен.' + #13#10 + #13#10 +

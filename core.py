@@ -148,7 +148,7 @@ class Queue:
 def default_state():
     return {'version': 1, 'playlists': [], 'queue': [], 'index': -1, 'position': 0,
             'volume': 50, 'repeat': 'off', 'shuffle': False, 'source': '',
-            'theme': None, 'window_position': None}
+            'theme': None, 'window_position': None, 'window_scale': 1}
 
 
 class Store:

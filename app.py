@@ -8,6 +8,11 @@ import os
 import sys
 from pathlib import Path
 
+# The installer runs its temporary copy without starting Qt or touching a profile.
+if __name__=='__main__' and '--prepare-update' in sys.argv:
+    from windows_update import updater_main
+    raise SystemExit(updater_main(sys.argv[1:]))
+
 import numpy as np
 from PySide6.QtCore import Qt, QUrl, QTimer, QRectF, QPointF, Signal, QLockFile
 from PySide6.QtGui import (QColor, QPainter, QPen, QLinearGradient, QPainterPath,
@@ -25,6 +30,7 @@ from visualizers import draw_visualizer,PRESET_IDS,preset_info,sample
 BUTTONS = {'previous': '<', 'play': '▶ PLAY', 'next': '>', 'stop': 'STOP',
            'playlist': 'LIST', 'info': '!', 'visual': 'VIS', 'skin': 'SKIN',
            'options': '(W)', 'exit': '×'}
+WINDOW_SCALES = (1, 1.25, 1.5, 2)
 TIPS = {'previous':'Предыдущая · Ctrl+←', 'play':'Воспроизведение / пауза · Пробел',
         'next':'Следующая · Ctrl+→', 'stop':'Стоп', 'playlist':'Плейлисты и очередь · Ctrl+L',
         'info':'Сведения о треке', 'visual':'Выбрать визуализацию',
@@ -35,6 +41,14 @@ def clock_text(ms):
     seconds = max(0, int(ms) // 1000)
     hours, minutes, seconds = seconds // 3600, (seconds // 60) % 60, seconds % 60
     return f'{hours}:{minutes:02}:{seconds:02}' if hours else f'{minutes}:{seconds:02}'
+
+
+def window_scale(value):
+    try:
+        value=float(value)
+    except (TypeError,ValueError):
+        return 1.
+    return value if value in WINDOW_SCALES else 1.
 
 
 def app_icon():
@@ -252,6 +266,11 @@ class PlayerCanvas(QWidget):
             self.volume_drag=True
             self.volume_to(pt)
         else:
+            handle=self.window().windowHandle()
+            if handle is not None and handle.startSystemMove():
+                # The OS handles the drag across screens with different DPIs.
+                self.drag_origin=None;self.window_origin=None
+                return
             self.drag_origin=event.globalPosition().toPoint()
             self.window_origin=self.window().pos()
 
@@ -342,6 +361,7 @@ class PlayerWindow(QWidget):
         self.visual_phase=0.
         self.visual_dialog=None
         self.theme=validated_theme(store.state.get('theme'))
+        self.window_scale=window_scale(store.state.get('window_scale',1))
         self.player=QMediaPlayer(self)
         self.audio=QAudioOutput(self)
         self.player.setAudioOutput(self.audio)
@@ -608,10 +628,13 @@ class PlayerWindow(QWidget):
         self.resize_reference()
         self.persist()
 
-    def resize_reference(self,factor=1):
-        # Original WAVEN uses an 800 x 250 physical-pixel surface on this PC.
-        ratio=self.devicePixelRatioF()
-        self.resize(round(self.theme['width']*factor/ratio),round(self.theme['height']*factor/ratio))
+    def resize_reference(self,factor=None):
+        if factor is not None:self.window_scale=window_scale(factor)
+        # QWidget geometry is already device-independent. Qt applies each
+        # monitor's DPI; dividing here would apply scaling a second time.
+        self.resize(round(self.theme['width']*self.window_scale),
+                    round(self.theme['height']*self.window_scale))
+        if factor is not None:self.persist()
 
     def show_menu(self,point):
         menu=QMenu(self)
@@ -634,8 +657,10 @@ class PlayerWindow(QWidget):
             action.setChecked(self.store.state.get('repeat','off')==value)
             action.triggered.connect(lambda checked=False,v=value:self.setting('repeat',v))
         scale=menu.addMenu('Размер окна')
-        for factor in (1,1.25,1.5,2):
-            scale.addAction(f'{round(factor*100)}%',lambda f=factor:self.resize_reference(f))
+        for factor in WINDOW_SCALES:
+            action=scale.addAction(f'{round(factor*100)}%')
+            action.setCheckable(True);action.setChecked(factor==self.window_scale)
+            action.triggered.connect(lambda checked=False,f=factor:self.resize_reference(f))
         top=menu.addAction('Поверх всех окон')
         top.setCheckable(True)
         top.setChecked(bool(self.windowFlags() & Qt.WindowStaysOnTopHint))
@@ -663,7 +688,7 @@ class PlayerWindow(QWidget):
         self.store.state.update(queue=self.queue.tracks[:],index=self.queue.index,
                                 position=self.pending_position or self.position,volume=round(self.audio.volume()*100),
                                 theme=copy.deepcopy(self.theme),visual_preset=self.visual_preset,
-                                window_position=[self.x(),self.y()])
+                                window_position=[self.x(),self.y()],window_scale=self.window_scale)
         try:
             self.store.save()
         except OSError as exc:
@@ -682,7 +707,7 @@ class PlayerWindow(QWidget):
 def main():
     app=QApplication(sys.argv)
     app.setApplicationName('Waven Custom')
-    app.setApplicationVersion('2.0.1')
+    app.setApplicationVersion('2.0.2')
     app.setOrganizationName('Drago')
     app.setStyle('Fusion')
     app.setWindowIcon(app_icon())

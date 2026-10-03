@@ -3,12 +3,14 @@ from __future__ import annotations
 import math
 from types import SimpleNamespace
 import numpy as np
-from PySide6.QtCore import Qt, QRectF, QPointF, QTimer
+from PySide6.QtCore import Qt, QRectF, QPointF, QTimer, QSize, QElapsedTimer, QEvent
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QLinearGradient, QRadialGradient
-from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QGridLayout, QWidget, QScrollArea
+from PySide6.QtWidgets import (QDialog, QVBoxLayout, QPushButton, QAbstractButton, QLabel,
+                               QGridLayout, QWidget, QScrollArea, QSizePolicy)
 
 PRESETS = [
-    ('gold','Золотая волна','wave',('#dba51a','#ffda47','#ffeab4')),
+    # Keep the old key so existing profiles retain their selected effect.
+    ('gold','Переливающаяся волна','wave',('#dba51a','#ffda47','#ffeab4')),
     ('aurora','Северное сияние','ribbon',('#7000ed','#d600df','#f6de32','#00c6ac')),
     ('violet','Фиолетовая лента','ribbon',('#6b10ae','#e300db','#410474')),
     ('ocean','Океан','ribbon',('#087b87','#13bbae','#b8d8d2')),
@@ -45,11 +47,27 @@ def sample(values,count):
     return np.interp(np.linspace(0,len(values)-1,count),np.arange(len(values)),values)
 
 
+def demo_signal(phase):
+    """Moving illustrative audio, independent of playback volume or pause."""
+    x=np.linspace(0,math.tau,140)
+    beat=.66+.22*math.sin(phase*2.7)
+    wave=(.25+.45*np.abs(np.sin(x*1.7-phase*1.3))+.22*np.sin(x*13+phase*4)**2)*beat
+    spectrum=(.1+.72*np.abs(np.sin(x*1.5-phase*.9))**2)*np.linspace(1,.45,140)*beat
+    signed=np.sin(x*7+phase*3)*(.35+.35*np.sin(x*1.5-phase)**2)
+    return SimpleNamespace(wave=wave,spectrum=spectrum,peaks=np.minimum(1,spectrum+.11),
+        signal_wave=signed,stereo_wave=[signed,np.sin(x*9-phase*2)*.65],levels=[beat,beat*.9])
+
+
+def shimmer_colors(phase,base):
+    hue,saturation,value,_=QColor(base).getHsvF()
+    return tuple(QColor.fromHsvF((max(0,hue)+phase*.045+i*.19)%1,
+                                max(.65,saturation),max(.85,value)).name() for i in range(5))
+
+
 def draw_visualizer(p,rect,key,signal,phase=0,theme_colors=None):
     _,_,kind,colors=preset_info(key)
-    if key=='gold' and theme_colors:
-        fill=QColor(theme_colors['wave'])
-        colors=(fill.darker(140).name(),fill.name(),fill.lighter(140).name())
+    if key=='gold':
+        colors=shimmer_colors(phase,theme_colors['wave'] if theme_colors else '#ffda47')
     p.save()
     p.setClipRect(rect)
     p.fillRect(rect,QColor('#060c0f'))
@@ -78,7 +96,7 @@ def draw_visualizer(p,rect,key,signal,phase=0,theme_colors=None):
         p.setBrush(gradient(r,colors))
         edge=QColor('#f2ddff' if key=='violet' else '#c7fffa' if key=='ocean' else '#fff4c3' if key=='gold' else '#ffffff')
         if key=='gold' and theme_colors:
-            edge=QColor(theme_colors['wave_edge'])
+            edge=QColor(shimmer_colors(phase,theme_colors['wave_edge'])[0]).lighter(140)
         p.setPen(QPen(edge,1.15))
         p.drawPath(path)
         if kind=='wave':
@@ -160,59 +178,123 @@ def draw_visualizer(p,rect,key,signal,phase=0,theme_colors=None):
     p.restore()
 
 
-class VisualCard(QPushButton):
+class VisualCard(QAbstractButton):
     def __init__(self,key,controller,parent=None):
         super().__init__(parent)
         self.key=key
         self.controller=controller
+        self.phase=0.
+        self.demo=demo_signal(0)
         self.setCheckable(True)
-        self.setMinimumSize(195,103)
+        # QAbstractButton avoids the common QPushButton stylesheet's min-height.
+        self.setMinimumSize(190,132)
+        self.setSizePolicy(QSizePolicy.Expanding,QSizePolicy.Fixed)
+        self.setFocusPolicy(Qt.StrongFocus)
         self.setCursor(Qt.PointingHandCursor)
         self.setAccessibleName(preset_info(key)[1])
+        self.setToolTip(preset_info(key)[1])
+
+    def sizeHint(self):
+        return QSize(218,132)
+
+    def minimumSizeHint(self):
+        return QSize(190,132)
+
+    def set_demo(self,signal,phase):
+        self.demo=signal;self.phase=phase;self.update()
+
+    def enterEvent(self,event):
+        super().enterEvent(event);self.update()
+
+    def leaveEvent(self,event):
+        super().leaveEvent(event);self.update()
 
     def paintEvent(self,event):
         p=QPainter(self);p.setRenderHint(QPainter.Antialiasing)
-        p.setPen(QPen(QColor('#32d8cb' if self.isChecked() else '#28414f'),2 if self.isChecked() else 1))
-        p.setBrush(QColor('#112d38' if self.isChecked() else '#10212b'))
+        active=self.isChecked()
+        p.setPen(QPen(QColor('#32d8cb' if active else '#52717e' if self.underMouse() else '#28414f'),2 if active else 1))
+        p.setBrush(QColor('#112d38' if self.isChecked() else '#162c37' if self.underMouse() else '#10212b'))
         p.drawRoundedRect(self.rect().adjusted(1,1,-1,-1),7,7)
-        # Explicit effect thumbnails use illustrative signals when audio is stopped.
-        c=self.controller
-        if max(c.levels)<.001:
-            x=np.linspace(0,math.tau,140)
-            c=SimpleNamespace(wave=np.abs(np.sin(x*2)*(.45+.3*np.sin(x*13))),
-                spectrum=(.16+.55*np.abs(np.sin(x*2.2)))*np.linspace(1,.4,140),
-                signal_wave=np.sin(x*7)*.6,stereo_wave=[np.sin(x*9)*.6,np.sin(x*11+.5)*.6],levels=[.55,.5])
-        draw_visualizer(p,QRectF(10,10,self.width()-20,self.height()-39),self.key,c,2,self.controller.theme['colors'])
+        if self.hasFocus():
+            p.setBrush(Qt.NoBrush);p.setPen(QPen(QColor('#98b1be'),1,Qt.DotLine))
+            p.drawRoundedRect(self.rect().adjusted(4,4,-4,-4),5,5)
+        preview=QRectF(10,10,self.width()-20,self.height()-42)
+        draw_visualizer(p,preview,self.key,self.demo,self.phase,self.controller.theme['colors'])
+        if self.key=='off':
+            p.setPen(QColor('#64818e'));p.drawText(preview,Qt.AlignCenter,'—')
         p.setPen(QColor('#e3f3f7'))
-        p.drawText(QRectF(9,self.height()-26,self.width()-18,20),Qt.AlignCenter,preset_info(self.key)[1])
+        label=p.fontMetrics().elidedText(preset_info(self.key)[1],Qt.ElideRight,self.width()-18)
+        p.drawText(QRectF(9,self.height()-27,self.width()-18,20),Qt.AlignCenter,label)
 
 
 class VisualizerDialog(QDialog):
     def __init__(self,controller):
         super().__init__(controller)
-        from dialogs import DIALOG_STYLE
+        from ui_style import DIALOG_STYLE
         self.controller=controller
         self.setWindowTitle('Визуализация · WAVEN Custom')
+        self.setAttribute(Qt.WA_DeleteOnClose)
         self.setStyleSheet(DIALOG_STYLE)
-        self.resize(880,620)
+        self.setMinimumSize(450,430)
+        area=self.screen().availableGeometry()
+        self.resize(min(960,area.width()-40),min(760,area.height()-60))
         root=QVBoxLayout(self)
+        root.setContentsMargins(20,18,20,18);root.setSpacing(12)
         title=QLabel('Визуализация')
         title.setStyleSheet('font-size:23px;font-weight:600;color:#f1f9fa')
         root.addWidget(title)
-        root.addWidget(QLabel('Выберите эффект. Он сразу появится в плеере и сохранится для следующего запуска.'))
-        scroll=QScrollArea();scroll.setWidgetResizable(True)
-        panel=QWidget();panel.setObjectName('panel');grid=QGridLayout(panel)
+        subtitle=QLabel('Живые примеры работают даже без музыки. Нажмите на эффект, чтобы выбрать его для плеера.')
+        subtitle.setWordWrap(True);root.addWidget(subtitle)
+        self.scroll=QScrollArea();self.scroll.setWidgetResizable(True)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        panel=QWidget();panel.setObjectName('panel');self.grid=QGridLayout(panel)
+        self.grid.setContentsMargins(0,0,8,0);self.grid.setSpacing(12);self.grid.setAlignment(Qt.AlignTop)
+        self.columns=4
         self.cards=[]
         for i,(key,*_) in enumerate(PRESETS):
             card=VisualCard(key,controller)
             card.setChecked(key==controller.visual_preset)
             card.clicked.connect(lambda checked=False,k=key:self.select(k))
-            grid.addWidget(card,i//4,i%4)
+            self.grid.addWidget(card,i//4,i%4)
             self.cards.append(card)
-        scroll.setWidget(panel);root.addWidget(scroll,1)
-        self.description=QLabel();root.addWidget(self.description)
+        self.scroll.setWidget(panel);root.addWidget(self.scroll,1)
+        self.scroll.viewport().installEventFilter(self)
+        self.description=QLabel();self.description.setWordWrap(True);root.addWidget(self.description)
         close=QPushButton('Готово');close.clicked.connect(self.accept);root.addWidget(close,alignment=Qt.AlignRight)
+        self.clock=QElapsedTimer()
+        self.animation_timer=QTimer(self);self.animation_timer.setInterval(40)
+        self.animation_timer.timeout.connect(self.animate)
         self.update_description()
+
+    def eventFilter(self,watched,event):
+        if watched is self.scroll.viewport() and event.type()==QEvent.Resize:
+            self.reflow_cards()
+        return super().eventFilter(watched,event)
+
+    def reflow_cards(self):
+        columns=max(1,min(4,(self.scroll.viewport().width()-8+12)//(190+12)))
+        if columns==self.columns:return
+        for card in self.cards:self.grid.removeWidget(card)
+        for column in range(4):self.grid.setColumnStretch(column,0)
+        for i,card in enumerate(self.cards):self.grid.addWidget(card,i//columns,i%columns)
+        for column in range(columns):self.grid.setColumnStretch(column,1)
+        self.columns=columns
+
+    def showEvent(self,event):
+        super().showEvent(event)
+        self.reflow_cards();self.clock.start();self.animation_timer.start();self.animate()
+
+    def hideEvent(self,event):
+        self.animation_timer.stop()
+        super().hideEvent(event)
+
+    def animate(self):
+        phase=self.clock.elapsed()/1000
+        signal=demo_signal(phase)
+        viewport=self.scroll.viewport()
+        for card in self.cards:
+            if viewport.rect().intersects(card.rect().translated(card.mapTo(viewport,QPointF(0,0).toPoint()))):
+                card.set_demo(signal,phase)
 
     def select(self,key):
         self.controller.set_visualizer(key)
@@ -221,4 +303,4 @@ class VisualizerDialog(QDialog):
         self.update_description()
 
     def update_description(self):
-        self.description.setText('Выбран: '+preset_info(self.controller.visual_preset)[1]+' · Миниатюры показывают пример эффекта')
+        self.description.setText('Выбран: '+preset_info(self.controller.visual_preset)[1]+' · В плеере эффект реагирует на вашу музыку')

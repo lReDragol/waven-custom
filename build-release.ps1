@@ -1,4 +1,4 @@
-param([string]$Version='2.0.1', [string]$ISCC, [switch]$SkipPlayer)
+param([string]$Version='2.0.2', [string]$ISCC, [switch]$SkipPlayer)
 $ErrorActionPreference='Stop'
 Set-Location -LiteralPath $PSScriptRoot
 if (-not $SkipPlayer) { & .\build.ps1 }
