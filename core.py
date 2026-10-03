@@ -103,6 +103,8 @@ class Queue:
         self.tracks = list(tracks or [])
         self.index = min(max(index, 0), len(self.tracks) - 1) if self.tracks else -1
         self.history = []
+        self.shuffle_remaining = []
+        self.shuffle_signature = None
 
     @property
     def current(self):
@@ -112,6 +114,8 @@ class Queue:
         self.tracks = list(tracks)
         self.index = min(max(index, 0), len(self.tracks) - 1) if self.tracks else -1
         self.history.clear()
+        self.shuffle_remaining.clear()
+        self.shuffle_signature = None
 
     def advance(self, direction=1, repeat=False, shuffle=False, automatic=False):
         if not self.tracks:
@@ -123,8 +127,20 @@ class Queue:
                 if repeat and self.current and Path(self.current).is_file():
                     return self.current
                 return None
+            signature=tuple(self.tracks)
+            if signature!=self.shuffle_signature:
+                self.shuffle_remaining=candidates[:]
+                random.shuffle(self.shuffle_remaining)
+                self.shuffle_signature=signature
+            self.shuffle_remaining=[i for i in self.shuffle_remaining if i in candidates]
+            if not self.shuffle_remaining:
+                if not repeat:return None
+                self.shuffle_remaining=[i for i,path in enumerate(self.tracks) if Path(path).is_file()]
+                random.shuffle(self.shuffle_remaining)
+                if len(self.shuffle_remaining)>1 and self.shuffle_remaining[-1]==self.index:
+                    self.shuffle_remaining[0],self.shuffle_remaining[-1]=self.shuffle_remaining[-1],self.shuffle_remaining[0]
             self.history.append(self.index)
-            self.index = random.choice(candidates)
+            self.index = self.shuffle_remaining.pop()
             return self.current
         if shuffle and direction < 0:
             while self.history:

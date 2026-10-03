@@ -25,16 +25,16 @@ from PySide6.QtNetwork import QLocalServer, QLocalSocket
 
 from core import Store, Queue, open_selection
 from theme import DEFAULT_THEME, validated_theme, readable_text_color
-from visualizers import draw_visualizer,PRESET_IDS,preset_info,sample
+from visualizers import draw_visualizer,PRESET_IDS,preset_info,sample,migrate_visuals
 
 BUTTONS = {'previous': '<', 'play': '▶ PLAY', 'next': '>', 'stop': 'STOP',
            'playlist': 'LIST', 'info': '!', 'visual': 'VIS', 'skin': 'SKIN',
-           'options': '(W)', 'exit': '×'}
-WINDOW_SCALES = (1, 1.25, 1.5, 2)
+           'options': '(W)', 'mode': '→', 'exit': '×'}
+WINDOW_SCALES = (.5, .65, .75, .9, 1, 1.25, 1.5, 2)
 TIPS = {'previous':'Предыдущая · Ctrl+←', 'play':'Воспроизведение / пауза · Пробел',
         'next':'Следующая · Ctrl+→', 'stop':'Стоп', 'playlist':'Плейлисты и очередь · Ctrl+L',
         'info':'Сведения о треке', 'visual':'Выбрать визуализацию',
-        'skin':'Редактор оформления · Ctrl+T', 'options':'Меню', 'exit':'Закрыть'}
+        'skin':'Редактор оформления · Ctrl+T', 'options':'Меню', 'mode':'Повтор / перемешивание', 'exit':'Закрыть'}
 
 
 def clock_text(ms):
@@ -354,10 +354,10 @@ class PlayerWindow(QWidget):
         self.signal_wave=np.zeros(140)
         self.stereo_wave=[np.zeros(140),np.zeros(140)]
         self.levels=[0.,0.]
+        self.raw_levels=np.zeros(2)
         legacy={0:'gold',1:'rainbow_bars',2:'off'}.get(store.state.get('visual_mode'),'aurora')
         self.visual_preset=store.state.get('visual_preset',legacy)
-        if self.visual_preset not in PRESET_IDS:
-            self.visual_preset='aurora'
+        self.visual_preset,self.visual_settings=migrate_visuals(self.visual_preset,store.state.get('visual_settings',{}))
         self.visual_phase=0.
         self.visual_dialog=None
         self.theme=validated_theme(store.state.get('theme'))
@@ -376,6 +376,7 @@ class PlayerWindow(QWidget):
         self.player.mediaStatusChanged.connect(self.media_status)
         self.player.errorOccurred.connect(self.media_error)
         self.canvas=PlayerCanvas(self,self.theme,parent=self)
+        self.update_mode_button()
         self.pending_position=0
         self.playlists_dialog=None
         self.theme_dialog=None
@@ -417,6 +418,8 @@ class PlayerWindow(QWidget):
             self.levels=[v*.85 for v in self.levels]
         else:
             self.visual_phase+=.033
+            gain=0 if self.audio.isMuted() else self.audio.volume()
+            self.levels=(self.raw_levels*gain).clip(0,1).tolist()
         self.peaks=np.maximum(self.spectrum,self.peaks-.009)
         self.canvas.update()
 
@@ -435,9 +438,12 @@ class PlayerWindow(QWidget):
         samples/=scale
         channels=max(1,fmt.channelCount())
         frames=samples.reshape(-1,channels)
-        levels=np.sqrt(np.mean(frames*frames,axis=0))*2.5
-        self.levels=[float(min(1,levels[0])),float(min(1,levels[min(1,len(levels)-1)]))]
-        mono=np.mean(frames,axis=1)
+        levels=np.sqrt(np.mean(frames*frames,axis=0))
+        self.raw_levels=levels[[0,min(1,len(levels)-1)]]
+        gain=0 if self.audio.isMuted() else self.audio.volume()
+        self.levels=(self.raw_levels*gain).clip(0,1).tolist()
+        # Do not cancel antiphase stereo while extracting visual energy.
+        mono=frames[:,int(np.argmax(levels))]
         self.signal_wave=sample(np.convolve(mono,np.ones(5)/5,mode='same'),140).clip(-1,1)*1.8
         self.stereo_wave=[sample(np.convolve(frames[:,i],np.ones(5)/5,mode='same'),140).clip(-1,1)*1.8
                           for i in (0,min(1,channels-1))]
@@ -445,11 +451,12 @@ class PlayerWindow(QWidget):
         chunks=np.array_split(np.abs(mono),140)
         fresh=np.array([np.max(chunk) if len(chunk) else 0 for chunk in chunks])
         self.wave=np.maximum(fresh*1.4,self.wave*.65).clip(0,1)
-        fft=np.abs(np.fft.rfft(mono*np.hanning(len(mono))))
+        window=np.hanning(len(mono))
+        fft=np.abs(np.fft.rfft(mono*window))*2/max(1,window.sum())
         if len(fft)>2:
             bins=np.geomspace(1,len(fft)-1,141).astype(int)
             spec=np.array([np.max(fft[a:max(a+1,b)]) for a,b in zip(bins[:-1],bins[1:])])
-            self.spectrum=np.maximum(np.log1p(spec)*.20,self.spectrum*.8).clip(0,1)
+            self.spectrum=np.maximum((20*np.log10(np.maximum(spec,1e-6))+60)/60,self.spectrum*.8).clip(0,1)
         suffix=Path(self.queue.current or '').suffix[1:].upper()
         self.audio_format=f'{fmt.sampleRate()} Hz · {channels} ch · {suffix}'
 
@@ -580,7 +587,7 @@ class PlayerWindow(QWidget):
     def action(self,key):
         actions={'previous':self.previous_track,'next':self.next_track,'play':self.toggle,
                  'stop':self.player.stop,'playlist':self.show_playlists,'skin':self.show_theme,
-                 'exit':self.close,'info':self.show_info,'visual':self.switch_visual,
+                 'exit':self.close,'info':self.show_info,'visual':self.switch_visual,'mode':self.cycle_mode,
                  'options':lambda:self.show_menu(self.mapToGlobal(self.rect().bottomRight()))}
         actions[key]()
 
@@ -632,8 +639,8 @@ class PlayerWindow(QWidget):
         if factor is not None:self.window_scale=window_scale(factor)
         # QWidget geometry is already device-independent. Qt applies each
         # monitor's DPI; dividing here would apply scaling a second time.
-        self.resize(round(self.theme['width']*self.window_scale),
-                    round(self.theme['height']*self.window_scale))
+        self.resize(round(self.theme['window_width']*self.window_scale),
+                    round(self.theme['window_height']*self.window_scale))
         if factor is not None:self.persist()
 
     def show_menu(self,point):
@@ -682,12 +689,29 @@ class PlayerWindow(QWidget):
 
     def setting(self,key,value):
         self.store.state[key]=value
+        self.update_mode_button()
         self.persist()
+
+    def playback_mode(self):
+        if self.store.state.get('repeat')=='one':return 'one'
+        if self.store.state.get('shuffle'):return 'shuffle'
+        return 'all' if self.store.state.get('repeat')=='all' else 'off'
+
+    def update_mode_button(self):
+        label,description={'off':('→','По порядку, без повтора'),'one':('↻1','Повтор одного трека'),
+                           'all':('↻','Повтор всей очереди'),'shuffle':('MIX','Вразнобой по кругу')}[self.playback_mode()]
+        button=self.canvas.buttons['mode'];button.setText(label)
+        button.setToolTip(description+' · Нажмите для смены режима');button.setAccessibleName(description)
+
+    def cycle_mode(self):
+        modes=('off','one','all','shuffle');mode=modes[(modes.index(self.playback_mode())+1)%4]
+        self.store.state.update(repeat='all' if mode=='shuffle' else mode,shuffle=mode=='shuffle')
+        self.update_mode_button();self.persist()
 
     def persist(self):
         self.store.state.update(queue=self.queue.tracks[:],index=self.queue.index,
                                 position=self.pending_position or self.position,volume=round(self.audio.volume()*100),
-                                theme=copy.deepcopy(self.theme),visual_preset=self.visual_preset,
+                                theme=copy.deepcopy(self.theme),visual_preset=self.visual_preset,visual_settings=self.visual_settings,
                                 window_position=[self.x(),self.y()],window_scale=self.window_scale)
         try:
             self.store.save()
@@ -707,7 +731,7 @@ class PlayerWindow(QWidget):
 def main():
     app=QApplication(sys.argv)
     app.setApplicationName('Waven Custom')
-    app.setApplicationVersion('2.0.2')
+    app.setApplicationVersion('2.1.0')
     app.setOrganizationName('Drago')
     app.setStyle('Fusion')
     app.setWindowIcon(app_icon())

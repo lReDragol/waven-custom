@@ -8,6 +8,7 @@ from pathlib import Path
 
 DEFAULT_THEME = {
     'name': 'WAVEN · оригинальная компоновка', 'width': 800, 'height': 250,
+    'window_width': 600, 'window_height': 188,
     'colors': {'background_top': '#0a0c0f', 'background_bottom': '#051e2d',
                'border': '#174655', 'text': '#ffffff', 'artist': '#b4dce6',
                'album': '#6496a0', 'accent': '#00ffd5', 'button': '#6496a0',
@@ -26,7 +27,7 @@ DEFAULT_THEME = {
         'volume': [630,185,150,8], 'playlist': [250,220,40,20],
         'info': [300,220,40,20], 'visual': [350,220,40,20],
         'skin': [400,220,40,20], 'options': [450,220,40,20],
-        'exit': [780,0,20,20]
+        'mode': [500,220,50,20], 'exit': [780,0,20,20]
     }
 }
 
@@ -35,7 +36,7 @@ LABELS = {'cover':'Обложка', 'logo':'Логотип', 'title':'Назва
           'meter_left':'Левый канал', 'meter_right':'Правый канал', 'progress':'Прогресс',
           'time':'Время', 'previous':'Предыдущая', 'play':'Воспроизведение', 'next':'Следующая',
           'stop':'Стоп', 'volume':'Громкость', 'playlist':'Плейлисты', 'info':'Информация',
-          'visual':'Режим визуализации', 'skin':'Редактор темы', 'options':'Настройки', 'exit':'Закрыть'}
+          'visual':'Режим визуализации', 'skin':'Редактор темы', 'options':'Настройки', 'mode':'Повтор / перемешивание', 'exit':'Закрыть'}
 COLOR_LABELS = {'background_top':'Фон сверху', 'background_bottom':'Фон снизу', 'border':'Рамка',
                 'text':'Основной текст', 'artist':'Исполнитель', 'album':'Альбом', 'accent':'Акцент / прогресс',
                 'button':'Кнопки перехода', 'stop':'Кнопка STOP', 'small_button':'Малые кнопки',
@@ -61,6 +62,8 @@ def validated_theme(value):
     theme['name'] = str(value.get('name', theme['name']))[:120]
     theme['width'] = max(400, min(2400, int(value.get('width', 800))))
     theme['height'] = max(180, min(1600, int(value.get('height', 250))))
+    for key, design, minimum in (('window_width','width',300),('window_height','height',94)):
+        theme[key] = max(minimum,min(2400,int(value.get(key,round(theme[design]*.75)))))
     theme['font_size'] = max(7, min(28, int(value.get('font_size', 10))))
     import re
     for key, color in value.get('colors', {}).items():

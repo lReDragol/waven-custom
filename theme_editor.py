@@ -16,7 +16,7 @@ from ui_style import DIALOG_STYLE
 GROUPS = {
     'МЕДИА': ('cover','title','artist','album'),
     'ИНДИКАТОРЫ': ('visualizer','format','meter_left','meter_right','progress','time','volume'),
-    'УПРАВЛЕНИЕ': ('previous','play','next','stop','playlist','info','visual','skin','options'),
+    'УПРАВЛЕНИЕ': ('previous','play','next','stop','playlist','info','visual','skin','options','mode'),
     'ОКНО': ('logo','exit'),
 }
 PALETTES = {
@@ -66,6 +66,7 @@ class ThemeDialog(QDialog):
         self.palette.activated.connect(self.choose_palette);toolbar.addWidget(self.palette);toolbar.addStretch()
         self.undo_button=self.button('↶',self.undo,toolbar,'Отменить · Ctrl+Z');self.undo_button.setFixedWidth(38)
         self.redo_button=self.button('↷',self.redo,toolbar,'Повторить · Ctrl+Y');self.redo_button.setFixedWidth(38)
+        self.button('Сбросить оформление',self.reset_theme,toolbar)
         self.button('Импорт',self.import_file,toolbar);self.button('Экспорт',self.export_file,toolbar);root.addLayout(toolbar)
         splitter=QSplitter(Qt.Horizontal);root.addWidget(splitter,1)
         layers_panel=QWidget();layers_panel.setObjectName('panel');layers_layout=QVBoxLayout(layers_panel)
@@ -121,13 +122,14 @@ class ThemeDialog(QDialog):
         for heading,keys in [('ПОВЕРХНОСТИ',('background_top','background_bottom','border','track')),
                              ('ТЕКСТ',('text','artist','album')),
                              ('УПРАВЛЕНИЕ',('play_background','play_text','button','stop','small_button','accent')),
-                             ('ВИЗУАЛИЗАЦИЯ',('wave','wave_edge','meter'))]:
+                             ('ИНДИКАТОРЫ КАНАЛОВ',('meter',))]:
             self.section_label(heading,palette_layout)
             for key in keys:self.color_buttons[key]=self.color_row(key,palette_layout)
         palette_layout.addStretch()
-        canvas_page,canvas_layout=self.inspector_page();self.tabs.addTab(canvas_page,'Холст');self.section_label('РАЗМЕР ПЛЕЕРА',canvas_layout)
-        self.width=self.number_row('Ширина',400,2400,' px',canvas_layout)
-        self.height=self.number_row('Высота',180,1600,' px',canvas_layout)
+        canvas_page,canvas_layout=self.inspector_page();self.tabs.addTab(canvas_page,'Окно');self.section_label('РАЗМЕР ОКНА ПРИ 100%',canvas_layout)
+        self.width=self.number_row('Ширина',300,2400,' px',canvas_layout)
+        self.height=self.number_row('Высота',94,2400,' px',canvas_layout)
+        hint=QLabel('Базовый размер в логических пикселях. Масштаб Windows учитывается автоматически.');hint.setWordWrap(True);canvas_layout.addWidget(hint)
         self.section_label('ТИПОГРАФИКА',canvas_layout);self.font=self.number_row('Базовый текст',7,28,' px',canvas_layout)
         hint=QLabel('Размер задаётся в пикселях макета. Масштаб предпросмотра не меняет размер плеера.')
         hint.setWordWrap(True);hint.setStyleSheet('color:#8fa1b7');canvas_layout.addWidget(hint)
@@ -176,7 +178,7 @@ class ThemeDialog(QDialog):
 
     def refresh(self):
         self.syncing=True;self.name.setText(self.draft['name'])
-        for widget,key in ((self.width,'width'),(self.height,'height'),(self.font,'font_size')):widget.setValue(self.draft[key])
+        for widget,key in ((self.width,'window_width'),(self.height,'window_height'),(self.font,'font_size')):widget.setValue(self.draft[key])
         for key,button in self.color_buttons.items():self.paint_swatch(button,self.draft['colors'][key])
         self.preview.set_theme(self.draft);self.preview.selected=self.selected_key
         self.layers.setCurrentItem(self.layer_items[self.selected_key]);self.update_properties()
@@ -195,10 +197,10 @@ class ThemeDialog(QDialog):
         keys={'play':('play_background','play_text'),'previous':('button',),'next':('button',),'stop':('stop',),
               'title':('text',),'artist':('artist',),'album':('album',),'progress':('accent','track'),
               'volume':('accent','track'),'meter_left':('meter',),'meter_right':('meter',),
-              'visualizer':('wave','wave_edge')}.get(self.selected_key,())
-        if self.selected_key in ('playlist','info','visual','skin','options'):keys=('small_button','text')
+              'visualizer':()}.get(self.selected_key,())
+        if self.selected_key in ('playlist','info','visual','skin','options','mode'):keys=('small_button','text')
         for key in keys:self.color_row(key,self.element_color_layout)
-        self.element_color_note.setText('Эти цвета меняют золотую волну. Остальные эффекты используют свои палитры.' if self.selected_key=='visualizer'
+        self.element_color_note.setText('Цвета и параметры каждого эффекта настраиваются в окне VIS.' if self.selected_key=='visualizer'
                                         else '' if keys else 'Цвет задаётся содержимым элемента.')
 
     def update_status(self):
@@ -246,7 +248,7 @@ class ThemeDialog(QDialog):
 
     def change_dimensions(self):
         if self.syncing:return
-        self.draft.update(width=self.width.value(),height=self.height.value(),font_size=self.font.value())
+        self.draft.update(window_width=self.width.value(),window_height=self.height.value(),font_size=self.font.value())
         self.draft=validated_theme(self.draft);self.record();self.refresh()
 
     def change_name(self):
@@ -268,10 +270,10 @@ class ThemeDialog(QDialog):
     def update_zoom(self,*args):
         if not hasattr(self,'canvas_scroll'):return
         index=self.zoom_combo.currentIndex();area=self.canvas_scroll.viewport().size()
-        factor=min((area.width()-48)/self.draft['width'],(area.height()-48)/self.draft['height'],1.25) if index==0 else (.5,.75,1,1.25,1.5)[index-1]
+        factor=min((area.width()-48)/self.draft['window_width'],(area.height()-48)/self.draft['window_height'],1.25) if index==0 else (.5,.75,1,1.25,1.5)[index-1]
         factor=max(.15,factor)
-        self.preview.setFixedSize(round(self.draft['width']*factor),round(self.draft['height']*factor))
-        self.canvas_size.setText(f'{self.draft["width"]} × {self.draft["height"]}  ·  {round(factor*100)}%')
+        self.preview.setFixedSize(round(self.draft['window_width']*factor),round(self.draft['window_height']*factor))
+        self.canvas_size.setText(f'{self.draft["window_width"]} × {self.draft["window_height"]}  ·  {round(factor*100)}%')
 
     def resizeEvent(self,event):
         super().resizeEvent(event);QTimer.singleShot(0,self.update_zoom)
@@ -281,7 +283,7 @@ class ThemeDialog(QDialog):
         self.draft=validated_theme(self.draft);self.record();self.refresh()
 
     def reset_theme(self):
-        if QMessageBox.question(self,'Сбросить оформление?','Вернуть исходные цвета и расположение? Действие можно отменить через Ctrl+Z.')==QMessageBox.Yes:
+        if QMessageBox.question(self,'Сбросить оформление?','Вернуть исходные цвета, расположение и размер 600 × 188 при 100%? Плейлисты не изменятся. Действие можно отменить через Ctrl+Z.')==QMessageBox.Yes:
             self.draft=copy.deepcopy(DEFAULT_THEME);self.record();self.refresh()
 
     def import_file(self):

@@ -4,9 +4,10 @@ import math
 from types import SimpleNamespace
 import numpy as np
 from PySide6.QtCore import Qt, QRectF, QPointF, QTimer, QSize, QElapsedTimer, QEvent
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QLinearGradient, QRadialGradient
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QBrush, QLinearGradient, QRadialGradient
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QPushButton, QAbstractButton, QLabel,
-                               QGridLayout, QWidget, QScrollArea, QSizePolicy)
+                               QGridLayout, QWidget, QScrollArea, QSizePolicy, QHBoxLayout,
+                               QFormLayout, QDoubleSpinBox, QSpinBox, QCheckBox, QColorDialog)
 
 PRESETS = [
     # Keep the old key so existing profiles retain their selected effect.
@@ -26,7 +27,41 @@ PRESETS = [
     ('cyan','Бирюзовый осциллограф','scope',('#06a4c6','#7bffeb','#f6fff4')),
     ('off','Без визуализации','off',('#153844','#153844')),
 ]
+LEGACY_PRESETS = {p[0]:p for p in PRESETS}
+ALIASES={'violet':'aurora','ocean':'aurora','purple':'gold','sunset':'gold',
+         'fire_bars':'green_bars','stereo_sunset':'stereo_ice'}
+NAMES={'gold':'Волна','aurora':'Лента','green_bars':'Эквалайзер','rainbow_bars':'Спектр',
+       'petals':'Лепестки','orbit':'Орбита','stereo_ice':'Стерео','cyan':'Осциллограф'}
+PRESETS=[(key,NAMES.get(key,name),kind,colors) for key,name,kind,colors in PRESETS if key not in ALIASES]
+PRESETS[-1:-1]=[('tunnel','Частотный тоннель','tunnel',('#29e5d5','#5396ff','#eb67f7')),
+               ('vectorscope','Стереополе','vectorscope',('#6affe0','#94bdff','#ef72de'))]
 PRESET_IDS = {p[0] for p in PRESETS}
+
+
+def visual_config(key,value=None):
+    import re
+    value=value if isinstance(value,dict) else {}
+    palette=list(preset_info(key)[3])
+    palette=[palette[0],palette[len(palette)//2],palette[-1]]
+    if key=='gold':palette=['#a92bff','#ffe553','#19e4cb']
+    colors=value.get('colors',palette)
+    if not isinstance(colors,list) or len(colors)!=3 or not all(isinstance(c,str) and re.fullmatch('#[0-9a-fA-F]{6}',c) for c in colors):colors=palette
+    def number(name,default,low,high):
+        try:return max(low,min(high,float(value.get(name,default))))
+        except (TypeError,ValueError):return default
+    return dict(colors=colors[:],sensitivity=number('sensitivity',1,.25,4),
+                speed=number('speed',1,0,3),detail=int(number('detail',36,12,96)),
+                glow=bool(value.get('glow',True)),color_motion=bool(value.get('color_motion',key in ('gold','petals','orbit'))))
+
+
+def migrate_visuals(key,settings):
+    settings=settings if isinstance(settings,dict) else {}
+    result={k:visual_config(k,v) for k,v in settings.items() if k in PRESET_IDS}
+    canonical=ALIASES.get(key,key)
+    if key in ALIASES and canonical not in result:
+        palette=LEGACY_PRESETS[key][3]
+        result[canonical]=visual_config(canonical,dict(colors=[palette[0],palette[len(palette)//2],palette[-1]],color_motion=False))
+    return canonical if canonical in PRESET_IDS else 'aurora',result
 
 
 def preset_info(key):
@@ -64,10 +99,13 @@ def shimmer_colors(phase,base):
                                 max(.65,saturation),max(.85,value)).name() for i in range(5))
 
 
-def draw_visualizer(p,rect,key,signal,phase=0,theme_colors=None):
+def draw_visualizer(p,rect,key,signal,phase=0,theme_colors=None,settings=None):
     _,_,kind,colors=preset_info(key)
-    if key=='gold':
-        colors=shimmer_colors(phase,theme_colors['wave'] if theme_colors else '#ffda47')
+    config=visual_config(key,(settings if settings is not None else getattr(signal,'visual_settings',{})).get(key,{}))
+    colors=config['colors'];phase*=config['speed']
+    if config['color_motion']:
+        colors=[QColor.fromHsvF((max(0,QColor(c).hsvHueF())+phase*.045)%1,
+                              QColor(c).hsvSaturationF(),QColor(c).valueF()).name() for c in colors]
     p.save()
     p.setClipRect(rect)
     p.fillRect(rect,QColor('#060c0f'))
@@ -76,9 +114,9 @@ def draw_visualizer(p,rect,key,signal,phase=0,theme_colors=None):
         p.restore()
         return
     n=140
-    wave=sample(signal.wave,n).clip(0,1)
-    spec=sample(signal.spectrum,n).clip(0,1)
-    energy=min(1,max(signal.levels))
+    wave=(sample(signal.wave,n)*config['sensitivity']).clip(0,1)
+    spec=(sample(signal.spectrum,n)*config['sensitivity']).clip(0,1)
+    energy=float(np.sqrt(np.mean(wave*wave)))
     mid=r.center().y()
     if kind in ('wave','ribbon'):
         x=np.linspace(0,1,n)
@@ -95,8 +133,7 @@ def draw_visualizer(p,rect,key,signal,phase=0,theme_colors=None):
         path.closeSubpath()
         p.setBrush(gradient(r,colors))
         edge=QColor('#f2ddff' if key=='violet' else '#c7fffa' if key=='ocean' else '#fff4c3' if key=='gold' else '#ffffff')
-        if key=='gold' and theme_colors:
-            edge=QColor(shimmer_colors(phase,theme_colors['wave_edge'])[0]).lighter(140)
+        if key=='gold':edge=QColor(colors[1]).lighter(150)
         p.setPen(QPen(edge,1.15))
         p.drawPath(path)
         if kind=='wave':
@@ -109,7 +146,7 @@ def draw_visualizer(p,rect,key,signal,phase=0,theme_colors=None):
             p.setBrush(Qt.NoBrush)
             p.drawPath(line)
     elif kind in ('bars','segments'):
-        bars=36
+        bars=config['detail']
         levels=sample(spec,bars)
         peaks=sample(getattr(signal,'peaks',spec),bars)
         width=r.width()/bars
@@ -118,7 +155,7 @@ def draw_visualizer(p,rect,key,signal,phase=0,theme_colors=None):
             bar=QRectF(r.left()+i*width+1,r.bottom()-h,max(1,width-2),h)
             p.setPen(Qt.NoPen)
             if kind=='segments':
-                color=QColor.fromHsvF((i/bars*.78)%1,1,.95)
+                color=QColor(colors[min(2,int(i/bars*3))])
                 p.setBrush(color)
                 for y in np.arange(r.bottom()-2,bar.top(),-3):
                     p.drawRect(QRectF(bar.x(),float(y),bar.width(),1.5))
@@ -127,27 +164,28 @@ def draw_visualizer(p,rect,key,signal,phase=0,theme_colors=None):
                 p.drawRoundedRect(bar,1.8 if key=='fire_bars' else .3,1.8 if key=='fire_bars' else .3)
             if peaks[i]>.02:
                 p.fillRect(QRectF(bar.x(),r.bottom()-peaks[i]*r.height()*.93-2,bar.width(),1.4),
-                           QColor('#d7dfff') if kind=='bars' else QColor.fromHsvF(i/bars*.78,.5,1))
-    elif kind in ('petals','orbit'):
+                           QColor('#d7dfff') if kind=='bars' else color.lighter(150))
+    elif kind in ('petals','orbit','tunnel'):
         center=r.center()
-        maximum=min(r.height()*.46,r.width()*.25)
+        maximum=min(r.height()*.46,r.width()*.46)
         path=QPainterPath()
         points=180
-        values=sample(wave,points)
+        values=sample(spec,points)
         rotation=phase*.4
         for i in range(points+1):
             theta=i/points*math.tau
             if kind=='petals':
-                radius=maximum*(.08+(.2+.7*energy)*abs(math.sin(theta*1.5)))*(.7+.3*values[i%points])
+                lobes=max(3,config['detail']//6)
+                radius=maximum*(.1+abs(math.sin(theta*lobes/2))*(.25+.6*math.sqrt(values[i%points])+.05*energy))
             else:
-                radius=maximum*(.48+.38*energy+.14*values[i%points])*(.9+.1*math.sin(theta*6+phase))
+                radius=maximum*(.25+.12*energy+.58*values[i%points])
             point=QPointF(center.x()+radius*math.cos(theta+rotation),center.y()+radius*math.sin(theta+rotation))
             path.moveTo(point) if i==0 else path.lineTo(point)
         path.closeSubpath()
-        shifted=[QColor.fromHsvF((phase*.035+i*.24)%1,.8,.95) for i in range(3)]
+        shifted=[QColor(c) for c in colors]
         if kind=='orbit':
             g=QRadialGradient(center,maximum)
-            g.setColorAt(0,QColor('#cd18ff'));g.setColorAt(.32,QColor('#497fb1'))
+            g.setColorAt(0,shifted[0]);g.setColorAt(.32,shifted[1])
             g.setColorAt(.85,shifted[1]);g.setColorAt(1,shifted[2])
             p.setPen(QPen(shifted[2],2.2))
         else:
@@ -155,16 +193,44 @@ def draw_visualizer(p,rect,key,signal,phase=0,theme_colors=None):
             g.setColorAt(0,shifted[0]);g.setColorAt(.5,shifted[1]);g.setColorAt(1,shifted[2])
             p.setPen(Qt.NoPen)
         p.setBrush(g);p.drawPath(path)
-        if kind=='orbit':
-            p.setPen(QPen(QColor('#dc32ff'),1.7));p.setBrush(Qt.NoBrush)
-            p.drawEllipse(center,4,4)
+        if kind in ('orbit','tunnel'):
+            p.setBrush(Qt.NoBrush)
+            bands=sample(spec,config['detail'])
+            for i,v in enumerate(bands):
+                theta=math.tau*i/len(bands)+rotation
+                inner=maximum*.3;outer=inner+maximum*.68*v
+                p.setPen(QPen(shifted[i%3],max(1,maximum/25)))
+                p.drawLine(QPointF(center.x()+inner*math.cos(theta),center.y()+inner*math.sin(theta)),
+                           QPointF(center.x()+outer*math.cos(theta),center.y()+outer*math.sin(theta)))
+            if kind=='tunnel':
+                for j in range(1,6):
+                    factor=(j/6+phase*.12)%1
+                    p.save();p.translate(center);p.scale(factor*2.2,factor*2.2);p.translate(-center)
+                    color=QColor(colors[j%3]);color.setAlpha(int(190*(1-factor)))
+                    p.setPen(QPen(color,1.2));p.drawPath(path);p.restore()
+        else:
+            p.setPen(QPen(shifted[2],.8));p.setBrush(Qt.NoBrush)
+            for i,v in enumerate(sample(spec,max(3,config['detail']//6))):
+                theta=math.tau*i/max(3,config['detail']//6)+rotation
+                p.drawLine(center,QPointF(center.x()+maximum*v*math.cos(theta),center.y()+maximum*v*math.sin(theta)))
+    elif kind=='vectorscope':
+        center=r.center();size=min(r.width(),r.height())*.45
+        p.setPen(QPen(QColor('#28414f'),.6));p.setBrush(Qt.NoBrush)
+        p.drawEllipse(center,size,size)
+        channels=getattr(signal,'stereo_wave',[wave,wave]);count=config['detail']*4
+        left=sample(channels[0],count)*config['sensitivity'];right=sample(channels[1],count)*config['sensitivity']
+        path=QPainterPath()
+        for i,(l,rr) in enumerate(zip(left,right)):
+            point=QPointF(center.x()+np.clip((l-rr)*.707,-1,1)*size,center.y()-np.clip((l+rr)*.707,-1,1)*size)
+            path.moveTo(point) if not i else path.lineTo(point)
+        p.setPen(QPen(QBrush(gradient(r,colors)),1.2));p.drawPath(path)
     elif kind in ('stereo','scope'):
         p.setPen(QPen(QColor('#1c2330'),.5))
         for i in range(12):
             x=r.left()+r.width()*i/12;p.drawLine(QPointF(x,r.top()),QPointF(x,r.bottom()))
         channels=getattr(signal,'stereo_wave',[wave,wave]) if kind=='stereo' else [getattr(signal,'signal_wave',wave)]
         for channel,values in enumerate(channels):
-            values=sample(values,n)
+            values=(sample(values,n)*config['sensitivity']).clip(-1,1)
             center=r.top()+r.height()*(.28 if channel==0 else .76) if kind=='stereo' else mid
             amplitude=r.height()*(.21 if kind=='stereo' else .44)
             path=QPainterPath()
@@ -172,9 +238,14 @@ def draw_visualizer(p,rect,key,signal,phase=0,theme_colors=None):
                 point=QPointF(r.left()+i*r.width()/(n-1),center-float(v)*amplitude)
                 path.moveTo(point) if i==0 else path.lineTo(point)
             p.setBrush(Qt.NoBrush)
-            for width,alpha in ((6,25),(3.5,70),(1.2,255)):
+            for width,alpha in (((6,25),(3.5,70),(1.2,255)) if config['glow'] else ((1.2,255),)):
                 color=QColor(colors[channel%len(colors)]);color.setAlpha(alpha)
-                p.setPen(QPen(color,width));p.drawPath(path)
+                if kind=='scope':
+                    shades=[QColor(c) for c in colors]
+                    for shade in shades:shade.setAlpha(alpha)
+                    p.setPen(QPen(QBrush(gradient(r,shades)),width))
+                else:p.setPen(QPen(color,width))
+                p.drawPath(path)
     p.restore()
 
 
@@ -219,7 +290,7 @@ class VisualCard(QAbstractButton):
             p.setBrush(Qt.NoBrush);p.setPen(QPen(QColor('#98b1be'),1,Qt.DotLine))
             p.drawRoundedRect(self.rect().adjusted(4,4,-4,-4),5,5)
         preview=QRectF(10,10,self.width()-20,self.height()-42)
-        draw_visualizer(p,preview,self.key,self.demo,self.phase,self.controller.theme['colors'])
+        draw_visualizer(p,preview,self.key,self.demo,self.phase,self.controller.theme['colors'],self.controller.visual_settings)
         if self.key=='off':
             p.setPen(QColor('#64818e'));p.drawText(preview,Qt.AlignCenter,'—')
         p.setPen(QColor('#e3f3f7'))
@@ -260,11 +331,64 @@ class VisualizerDialog(QDialog):
         self.scroll.setWidget(panel);root.addWidget(self.scroll,1)
         self.scroll.viewport().installEventFilter(self)
         self.description=QLabel();self.description.setWordWrap(True);root.addWidget(self.description)
+        controls=QWidget();form=QGridLayout(controls);form.setContentsMargins(0,0,0,0)
+        self.color_buttons=[]
+        for index in range(3):
+            button=QPushButton('Цвет '+str(index+1));button.setFixedWidth(80)
+            button.clicked.connect(lambda checked=False,i=index:self.choose_color(i))
+            self.color_buttons.append(button);form.addWidget(button,0,index)
+        self.sensitivity=QDoubleSpinBox();self.sensitivity.setRange(.25,4);self.sensitivity.setSingleStep(.25)
+        self.sensitivity.setPrefix('Чувств. ×');self.sensitivity.valueChanged.connect(self.save_config);form.addWidget(self.sensitivity,1,0)
+        self.detail=QSpinBox();self.detail.setRange(12,96);self.detail.setSingleStep(6)
+        self.detail.setPrefix('Детали: ');self.detail.valueChanged.connect(self.save_config);form.addWidget(self.detail,1,1)
+        root.addWidget(controls)
+        second=QGridLayout()
+        self.motion=QCheckBox('Переливы цвета');self.motion.toggled.connect(self.save_config);second.addWidget(self.motion,0,0)
+        self.glow=QCheckBox('Свечение');self.glow.toggled.connect(self.save_config);second.addWidget(self.glow,0,1)
+        self.speed=QDoubleSpinBox();self.speed.setRange(0,3);self.speed.setSingleStep(.25)
+        self.speed.setPrefix('Скорость ×');self.speed.valueChanged.connect(self.save_config);form.addWidget(self.speed,1,2)
+        reset=QPushButton('Сбросить эффект');reset.clicked.connect(self.reset_config);second.addWidget(reset,0,2)
+        root.addLayout(second)
         close=QPushButton('Готово');close.clicked.connect(self.accept);root.addWidget(close,alignment=Qt.AlignRight)
         self.clock=QElapsedTimer()
         self.animation_timer=QTimer(self);self.animation_timer.setInterval(40)
         self.animation_timer.timeout.connect(self.animate)
         self.update_description()
+        self.load_config()
+
+    def load_config(self):
+        self.syncing=True
+        config=visual_config(self.controller.visual_preset,self.controller.visual_settings.get(self.controller.visual_preset))
+        for button,color in zip(self.color_buttons,config['colors']):
+            button.setStyleSheet('background:'+color+';color:'+('#111111' if QColor(color).lightness()>140 else '#ffffff'))
+        self.sensitivity.setValue(config['sensitivity']);self.detail.setValue(config['detail'])
+        self.speed.setValue(config['speed']);self.motion.setChecked(config['color_motion']);self.glow.setChecked(config['glow'])
+        kind=preset_info(self.controller.visual_preset)[2]
+        for i,button in enumerate(self.color_buttons):button.setEnabled(kind!='off' and not (kind=='stereo' and i==2))
+        self.sensitivity.setEnabled(kind!='off');self.motion.setEnabled(kind!='off')
+        self.speed.setEnabled(kind!='off')
+        self.detail.setEnabled(kind in ('bars','segments','petals','orbit','tunnel','vectorscope'))
+        self.glow.setEnabled(kind in ('stereo','scope'))
+        self.syncing=False
+
+    def save_config(self,*args):
+        if getattr(self,'syncing',True):return
+        key=self.controller.visual_preset
+        config=visual_config(key,self.controller.visual_settings.get(key))
+        config.update(sensitivity=self.sensitivity.value(),detail=self.detail.value(),speed=self.speed.value(),
+                      color_motion=self.motion.isChecked(),glow=self.glow.isChecked())
+        self.controller.visual_settings[key]=config;self.controller.persist();self.controller.canvas.update()
+
+    def choose_color(self,index):
+        key=self.controller.visual_preset;config=visual_config(key,self.controller.visual_settings.get(key))
+        color=QColorDialog.getColor(QColor(config['colors'][index]),self,'Цвет эффекта')
+        if color.isValid():
+            config['colors'][index]=color.name();self.controller.visual_settings[key]=config
+            self.controller.persist();self.load_config();self.controller.canvas.update()
+
+    def reset_config(self):
+        self.controller.visual_settings.pop(self.controller.visual_preset,None)
+        self.controller.persist();self.load_config();self.controller.canvas.update()
 
     def eventFilter(self,watched,event):
         if watched is self.scroll.viewport() and event.type()==QEvent.Resize:
@@ -301,6 +425,7 @@ class VisualizerDialog(QDialog):
         for card in self.cards:
             card.setChecked(card.key==key)
         self.update_description()
+        self.load_config()
 
     def update_description(self):
         self.description.setText('Выбран: '+preset_info(self.controller.visual_preset)[1]+' · В плеере эффект реагирует на вашу музыку')
