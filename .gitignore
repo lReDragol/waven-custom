@@ -1,0 +1,17 @@
+__pycache__/
+build/
+dist/
+*.spec
+.venv/
+*.log
+test-profile/
+_local/
+_qa/
+tools/
+releases/
+Data/
+portable.flag
+!packaging/portable.flag
+test_*.py
+smoke_test.py
+requirements-dev.txt
