@@ -682,7 +682,7 @@ class PlayerWindow(QWidget):
 def main():
     app=QApplication(sys.argv)
     app.setApplicationName('Waven Custom')
-    app.setApplicationVersion('2.0.0')
+    app.setApplicationVersion('2.0.1')
     app.setOrganizationName('Drago')
     app.setStyle('Fusion')
     app.setWindowIcon(app_icon())

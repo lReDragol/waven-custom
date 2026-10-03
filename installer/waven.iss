@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "2.0.0"
+  #define AppVersion "2.0.1"
 #endif
 [Setup]
 AppId={{3FDD6ECF-902E-4BA0-A1A9-17C5E6F693E1}
@@ -41,6 +41,22 @@ Name: "{group}\WAVEN Custom"; Filename: "{app}\Waven Custom.exe"
 Name: "{autodesktop}\WAVEN Custom"; Filename: "{app}\Waven Custom.exe"; Tasks: desktopicon
 
 [Registry]
+Root: HKCU; Subkey: "Software\Classes\WavenCustom.Audio\Application"; ValueType: string; ValueName: "ApplicationName"; ValueData: "WAVEN Custom"; Tasks: fileassoc
+Root: HKCU; Subkey: "Software\Classes\WavenCustom.Audio\Application"; ValueType: string; ValueName: "ApplicationDescription"; ValueData: "Музыка, плейлисты и визуализации"; Tasks: fileassoc
+Root: HKCU; Subkey: "Software\Classes\WavenCustom.Audio\Application"; ValueType: string; ValueName: "ApplicationIcon"; ValueData: """{app}\Waven Custom.exe"",0"; Tasks: fileassoc
+Root: HKCU; Subkey: "Software\Classes\Applications\Waven Custom.exe"; ValueType: string; ValueName: "FriendlyAppName"; ValueData: "WAVEN Custom"; Flags: uninsdeletekey; Tasks: fileassoc
+Root: HKCU; Subkey: "Software\Classes\Applications\Waven Custom.exe\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\Waven Custom.exe"",0"; Tasks: fileassoc
+Root: HKCU; Subkey: "Software\Classes\Applications\Waven Custom.exe\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\Waven Custom.exe"" ""%1"""; Tasks: fileassoc
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\App Paths\Waven Custom.exe"; ValueType: string; ValueName: ""; ValueData: "{app}\Waven Custom.exe"; Flags: uninsdeletekey; Tasks: fileassoc
+Root: HKCU; Subkey: "Software\Classes\Applications\Waven Custom.exe\SupportedTypes"; ValueType: string; ValueName: ".mp3"; ValueData: ""; Tasks: fileassoc
+Root: HKCU; Subkey: "Software\Classes\Applications\Waven Custom.exe\SupportedTypes"; ValueType: string; ValueName: ".wav"; ValueData: ""; Tasks: fileassoc
+Root: HKCU; Subkey: "Software\Classes\Applications\Waven Custom.exe\SupportedTypes"; ValueType: string; ValueName: ".flac"; ValueData: ""; Tasks: fileassoc
+Root: HKCU; Subkey: "Software\Classes\Applications\Waven Custom.exe\SupportedTypes"; ValueType: string; ValueName: ".m4a"; ValueData: ""; Tasks: fileassoc
+Root: HKCU; Subkey: "Software\Classes\Applications\Waven Custom.exe\SupportedTypes"; ValueType: string; ValueName: ".aac"; ValueData: ""; Tasks: fileassoc
+Root: HKCU; Subkey: "Software\Classes\Applications\Waven Custom.exe\SupportedTypes"; ValueType: string; ValueName: ".ogg"; ValueData: ""; Tasks: fileassoc
+Root: HKCU; Subkey: "Software\Classes\Applications\Waven Custom.exe\SupportedTypes"; ValueType: string; ValueName: ".opus"; ValueData: ""; Tasks: fileassoc
+Root: HKCU; Subkey: "Software\Classes\Applications\Waven Custom.exe\SupportedTypes"; ValueType: string; ValueName: ".wma"; ValueData: ""; Tasks: fileassoc
+Root: HKCU; Subkey: "Software\Classes\Applications\Waven Custom.exe\SupportedTypes"; ValueType: string; ValueName: ".aiff"; ValueData: ""; Tasks: fileassoc
 Root: HKCU; Subkey: "Software\Classes\WavenCustom.Audio"; ValueType: string; ValueName: ""; ValueData: "Аудиофайл WAVEN Custom"; Flags: uninsdeletekey; Tasks: fileassoc
 Root: HKCU; Subkey: "Software\Classes\WavenCustom.Audio\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\Waven Custom.exe"",0"; Tasks: fileassoc
 Root: HKCU; Subkey: "Software\Classes\WavenCustom.Audio\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\Waven Custom.exe"" ""%1"""; Tasks: fileassoc
@@ -68,13 +84,13 @@ Root: HKCU; Subkey: "Software\Classes\.aiff\OpenWithProgids"; ValueType: string;
 Root: HKCU; Subkey: "Software\RegisteredApplications"; ValueType: string; ValueName: "WAVEN Custom"; ValueData: "Software\WavenCustom\Capabilities"; Flags: uninsdeletevalue; Tasks: fileassoc
 
 [Run]
-Filename: "{app}\Waven Custom.exe"; Parameters: "--make-default"; Description: "Выбрать WAVEN Custom для MP3 в параметрах Windows (нужно подтверждение)"; Flags: postinstall nowait skipifsilent; Tasks: fileassoc
+Filename: "{app}\Waven Custom.exe"; Parameters: "--make-default"; Description: "Настроить открытие MP3 в WAVEN Custom (мастер с проверкой результата)"; Flags: postinstall nowait skipifsilent; Tasks: fileassoc
 Filename: "{app}\Waven Custom.exe"; Description: "Запустить WAVEN Custom"; Flags: postinstall nowait skipifsilent unchecked
 
 [Code]
 procedure InitializeWizard();
 begin
   WizardForm.FinishedLabel.Caption := 'WAVEN Custom установлен.' + #13#10 + #13#10 +
-    'Для открытия MP3 по умолчанию выберите WAVEN Custom в системных параметрах Windows. ' +
-    'Это действие требует вашего подтверждения.';
+    'Откройте мастер настройки MP3: он покажет текущий плеер, подскажет нужный пункт в Windows и проверит результат. ' +
+    'Галочка запускает настройку, а не заменяет системное подтверждение.';
 end;
